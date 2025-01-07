@@ -1,0 +1,7 @@
+openai-whisper
+sounddevice
+scipy
+numpy
+PyQt6
+openai
+faster-whisper 
