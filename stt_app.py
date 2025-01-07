@@ -14,6 +14,11 @@ import time
 import sqlite3
 from datetime import datetime
 import openai
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
 
 CHUNK_DURATION = 3  # seconds
 SAMPLE_RATE = 16000
@@ -42,7 +47,8 @@ class APIConfigDialog(QDialog):
         base_url_layout = QHBoxLayout()
         base_url_layout.addWidget(QLabel("Base URL:"))
         self.base_url_input = QLineEdit()
-        self.base_url_input.setPlaceholderText("https://api.openai.com/v1")
+        default_base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+        self.base_url_input.setPlaceholderText(default_base_url)
         base_url_layout.addWidget(self.base_url_input)
         layout.addLayout(base_url_layout)
         
@@ -50,7 +56,8 @@ class APIConfigDialog(QDialog):
         api_key_layout = QHBoxLayout()
         api_key_layout.addWidget(QLabel("API Key:"))
         self.api_key_input = QLineEdit()
-        self.api_key_input.setPlaceholderText("your-api-key-here")
+        default_api_key = os.getenv("OPENAI_API_KEY", "your-api-key-here")
+        self.api_key_input.setPlaceholderText(default_api_key)
         self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
         api_key_layout.addWidget(self.api_key_input)
         layout.addLayout(api_key_layout)
@@ -59,7 +66,8 @@ class APIConfigDialog(QDialog):
         model_layout = QHBoxLayout()
         model_layout.addWidget(QLabel("Model Name:"))
         self.model_input = QLineEdit()
-        self.model_input.setPlaceholderText("gpt-3.5-turbo")
+        default_model = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
+        self.model_input.setPlaceholderText(default_model)
         model_layout.addWidget(self.model_input)
         layout.addLayout(model_layout)
         
@@ -75,10 +83,15 @@ class APIConfigDialog(QDialog):
 
 class TranslationManager:
     def __init__(self):
-        self.base_url = "https://api.openai.com/v1"
-        self.api_key = None
+        # Initialize with environment variables if available
+        self.base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
+        self.api_key = os.getenv("OPENAI_API_KEY")
+        self.model_name = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
         self.client = None
-        self.model_name = "gpt-3.5-turbo"
+        
+        # If API key is available in environment, configure the client
+        if self.api_key:
+            self.configure(self.base_url, self.api_key, self.model_name)
     
     def configure(self, base_url, api_key, model_name=None):
         self.base_url = base_url
