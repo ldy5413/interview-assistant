@@ -6,8 +6,10 @@ import threading
 from PyQt6.QtCore import QThread, pyqtSignal
 import whisper
 from faster_whisper import WhisperModel
+
 # Load environment variables from .env file
 load_dotenv()
+
 class TranslationManager:
     def __init__(self):
         # Initialize with environment variables if available
@@ -47,10 +49,11 @@ class TranslationManager:
             return response.choices[0].message.content.strip()
         except Exception as e:
             raise Exception(f"Translation failed: {str(e)}")
-    
 
 class TranscriptionThread(QThread):
-    transcription_ready = pyqtSignal(str, str)  # (text, timestamp)
+    # New signal for streaming words
+    word_ready = pyqtSignal(str, str, bool)  # (text, timestamp, is_translation)
+    sentence_complete = pyqtSignal(bool)  # is_translation
     model_loaded = pyqtSignal(str)
     
     def __init__(self, language="en", model_name="base", model_type="whisper", 
@@ -66,9 +69,12 @@ class TranscriptionThread(QThread):
         self.db_manager = db_manager
         self.translation_manager = translation_manager
         self.auto_translate = auto_translate
-        self.text_buffer = []
-        self.buffer_timeout = 3.0  # seconds to wait before processing buffer
-        self.last_transcription_time = None
+        
+        # Buffers for current sentence
+        self.current_sentence = []
+        self.current_translation = []
+        self.sentence_end_markers = {'.', '!', '?', '。', '！', '？'}
+        self.last_timestamp = None
 
     def load_model(self):
         self.model_loaded.emit(f"Loading {self.model_type} {self.model_name} model...")
@@ -76,7 +82,6 @@ class TranscriptionThread(QThread):
             if self.model_type == "whisper":
                 self.model = whisper.load_model(self.model_name)
             else:  # faster-whisper
-                # Use CPU compute type for better compatibility, can be changed to 'cuda' for GPU
                 self.model = WhisperModel(self.model_name, device="cpu", compute_type="int8")
         self.model_loaded.emit(f"Model {self.model_name} loaded successfully!")
     
@@ -88,70 +93,96 @@ class TranscriptionThread(QThread):
             self.model_name = model_name
             self.model_type = model_type
             self.load_model()
+
+    def process_text(self, text, timestamp):
+        # Split text into words while preserving punctuation
+        words = text.replace('.', ' .').replace('!', ' !').replace('?', ' ?')\
+                   .replace('。', ' 。').replace('！', ' ！').replace('？', ' ？').split()
+        
+        for word in words:
+            # Check if this word ends with a sentence marker
+            ends_sentence = any(word.endswith(marker) for marker in self.sentence_end_markers)
+            
+            # Add word to current sentence
+            self.current_sentence.append(word)
+            
+            # Emit the word
+            self.word_ready.emit(word, timestamp, False)
+            
+            if ends_sentence:
+                # Get the complete sentence
+                sentence = ' '.join(self.current_sentence)
+                
+                # Handle translation if enabled
+                if self.auto_translate and self.translation_manager:
+                    try:
+                        source_lang = "English" if self.language == "en" else "Chinese"
+                        target_lang = "Chinese" if self.language == "en" else "English"
+                        translation = self.translation_manager.translate(sentence, source_lang, target_lang)
+                        
+                        # Emit translation words
+                        translation_words = translation.split()
+                        for trans_word in translation_words:
+                            self.word_ready.emit(trans_word, timestamp, True)
+                        self.sentence_complete.emit(True)
+                        
+                    except Exception as e:
+                        self.word_ready.emit(f"[Translation Error: {str(e)}]", timestamp, True)
+                        self.sentence_complete.emit(True)
+                
+                # Store in database
+                if self.db_manager:
+                    self.db_manager.add_transcription(sentence)
+                
+                # Signal sentence completion and reset buffer
+                self.sentence_complete.emit(False)
+                self.current_sentence = []
     
     def run(self):
         self.running = True
         self.load_model()
-        self.last_transcription_time = None
+        
         while self.running:
             try:
                 audio_data = self.audio_queue.get(timeout=1)
-                current_time = time.time()
+                timestamp = time.strftime("%H:%M:%S")
+                
                 with self.model_lock:
                     if self.model_type == "whisper":
                         result = self.model.transcribe(audio_data, language=self.language)
                         text = result["text"].strip()
                     else:  # faster-whisper
-                        # Convert float32 numpy array to the correct format
                         segments, _ = self.model.transcribe(audio_data, language=self.language)
                         text = " ".join([segment.text for segment in segments]).strip()
-                    
+                
                 if text:
-                    self.text_buffer.append(text)
-                                        # Process buffer if timeout exceeded or buffer getting too large
-                    if (self.last_transcription_time and 
-                        current_time - self.last_transcription_time > self.buffer_timeout) or \
-                        len(self.text_buffer) > 5:  # Adjust threshold as needed
-                        
-                        combined_text = " ".join(self.text_buffer)
-                        self.text_buffer = []
-                    # Handle translation if enabled
-                        if self.auto_translate and self.translation_manager:
-                            try:
-                                source_lang = "English" if self.language == "en" else "Chinese"
-                                target_lang = "Chinese" if self.language == "en" else "English"
-                                translation = self.translation_manager.translate(combined_text, source_lang, target_lang)
-                                combined_text = f"{combined_text}\n[Translation] {translation}"
-                            except Exception as e:
-                                combined_text = f"{combined_text}\n[Translation Error] {str(e)}"
-                        
-                        if self.db_manager:
-                            timestamp = self.db_manager.add_transcription(combined_text)
-                            self.transcription_ready.emit(combined_text, timestamp)
-                        else:
-                            self.transcription_ready.emit(combined_text, "")
-                    self.last_transcription_time = current_time
+                    self.process_text(text, timestamp)
+                    
             except queue.Empty:
-                                # Process any remaining text in buffer
-                if self.text_buffer:
-                    combined_text = " ".join(self.text_buffer)
-                    self.text_buffer = []
-                    
-                    if self.auto_translate and self.translation_manager:
-                        try:
-                            source_lang = "English" if self.language == "en" else "Chinese"
-                            target_lang = "Chinese" if self.language == "en" else "English"
-                            translation = self.translation_manager.translate(combined_text, source_lang, target_lang)
-                            combined_text = f"{combined_text}\n[Translation] {translation}"
-                        except Exception as e:
-                            combined_text = f"{combined_text}\n[Translation Error] {str(e)}"
-                    
-                    if self.db_manager:
-                        timestamp = self.db_manager.add_transcription(combined_text)
-                        self.transcription_ready.emit(combined_text, timestamp)
-                    else:
-                        self.transcription_ready.emit(combined_text, "")
                 continue
+            except Exception as e:
+                print(f"Error in transcription: {str(e)}")
     
     def stop(self):
         self.running = False
+        # Process any remaining text in the current sentence
+        if self.current_sentence:
+            sentence = ' '.join(self.current_sentence)
+            timestamp = time.strftime("%H:%M:%S")
+            
+            if self.auto_translate and self.translation_manager:
+                try:
+                    source_lang = "English" if self.language == "en" else "Chinese"
+                    target_lang = "Chinese" if self.language == "en" else "English"
+                    translation = self.translation_manager.translate(sentence, source_lang, target_lang)
+                    for word in translation.split():
+                        self.word_ready.emit(word, timestamp, True)
+                    self.sentence_complete.emit(True)
+                except Exception as e:
+                    self.word_ready.emit(f"[Translation Error: {str(e)}]", timestamp, True)
+                    self.sentence_complete.emit(True)
+            
+            if self.db_manager:
+                self.db_manager.add_transcription(sentence)
+            
+            self.sentence_complete.emit(False)

@@ -87,7 +87,7 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Speech to Text Converter")
-        self.setMinimumSize(1000, 600)
+        self.setMinimumSize(1200, 600)  # Increased width for 3 columns
         
         # Initialize managers
         self.db_manager = DatabaseManager()
@@ -101,30 +101,58 @@ class MainWindow(QMainWindow):
         # Create control panel
         control_panel = QHBoxLayout()
         
+        # Left side controls
+        left_controls = QHBoxLayout()
+        
         # Create language selection
         self.language_combo = QComboBox()
         self.language_combo.addItems(["English", "Chinese"])
-        control_panel.addWidget(QLabel("Language:"))
-        control_panel.addWidget(self.language_combo)
+        left_controls.addWidget(QLabel("Language:"))
+        left_controls.addWidget(self.language_combo)
         self.language_combo.currentTextChanged.connect(self.language_changed)
         
         # Create model selection
         self.model_combo = QComboBox()
         self.model_combo.addItems(WHISPER_MODELS.keys())
-        control_panel.addWidget(QLabel("Model:"))
-        control_panel.addWidget(self.model_combo)
+        left_controls.addWidget(QLabel("Model:"))
+        left_controls.addWidget(self.model_combo)
         self.model_combo.currentTextChanged.connect(self.model_changed)
         
-        # Create translation checkbox and config button
+        # Right side controls
+        right_controls = QHBoxLayout()
+        
+        # Create role selection
+        self.role_combo = QComboBox()
+        self.role_combo.addItems([
+            "General Assistant",
+            "Technical Interviewer",
+            "HR Interviewer",
+            "Meeting Participant",
+            "Student",
+            "Teacher",
+            "Custom..."
+        ])
+        self.role_combo.currentTextChanged.connect(self.role_changed)
+        right_controls.addWidget(QLabel("AI Role:"))
+        right_controls.addWidget(self.role_combo)
+        
+        # Create translation and AI answer checkboxes
         self.translate_check = QCheckBox("Auto Translate")
+        self.answer_check = QCheckBox("AI Answer Questions")
         self.api_config_button = QPushButton("API Settings")
-        control_panel.addWidget(self.translate_check)
-        control_panel.addWidget(self.api_config_button)
+        right_controls.addWidget(self.translate_check)
+        right_controls.addWidget(self.answer_check)
+        right_controls.addWidget(self.api_config_button)
         self.api_config_button.clicked.connect(self.configure_api)
         
         # Create start/stop button
         self.toggle_button = QPushButton("Start Streaming")
-        control_panel.addWidget(self.toggle_button)
+        right_controls.addWidget(self.toggle_button)
+        
+        # Add controls to main control panel
+        control_panel.addLayout(left_controls)
+        control_panel.addStretch()
+        control_panel.addLayout(right_controls)
         
         # Add control panel to main layout
         layout.addLayout(control_panel)
@@ -152,6 +180,14 @@ class MainWindow(QMainWindow):
         self.translation_output.setReadOnly(True)
         translation_section.addWidget(self.translation_output)
         text_container.addLayout(translation_section)
+        
+        # AI Answer section
+        answer_section = QVBoxLayout()
+        answer_section.addWidget(QLabel("AI Answers:"))
+        self.answer_output = QTextEdit()
+        self.answer_output.setReadOnly(True)
+        answer_section.addWidget(self.answer_output)
+        text_container.addLayout(answer_section)
         
         # Add text container to main layout
         layout.addLayout(text_container)
@@ -182,6 +218,13 @@ class MainWindow(QMainWindow):
         self.audio_streamer = None
         self.transcriber = None
         self.is_streaming = False
+        
+        # Store conversation context
+        self.conversation_context = []
+        self.context_window_size = 100  # Store last 10 exchanges
+        
+        # Store current role description
+        self.current_role = "You are a helpful assistant providing concise answers based on conversation context."
         
     def language_changed(self, new_language):
         if self.transcriber:
@@ -216,7 +259,10 @@ class MainWindow(QMainWindow):
             translation_manager=self.translation_manager,
             auto_translate=self.translate_check.isChecked()
         )
-        self.transcriber.transcription_ready.connect(self.handle_transcription)
+        
+        # Connect new signals
+        self.transcriber.word_ready.connect(self.handle_word)
+        self.transcriber.sentence_complete.connect(self.handle_sentence_complete)
         self.transcriber.model_loaded.connect(self.update_status)
         
         self.audio_streamer = AudioStreamer()
@@ -258,26 +304,64 @@ class MainWindow(QMainWindow):
         if self.transcriber:
             self.transcriber.audio_queue.put(audio_chunk)
     
-    def handle_transcription(self, text, timestamp):
-        # Split the text into original and translation if translation exists
-        parts = text.split("\n[Translation] ")
-        original_text = parts[0]
-        translation_text = parts[1] if len(parts) > 1 else ""
+    def handle_word(self, word, timestamp, is_translation):
+        # Get the appropriate text widget
+        text_widget = self.translation_output if is_translation else self.original_output
         
-        # Format and display original text
-        formatted_original = f"[{timestamp}] {original_text}"
-        self.original_output.append(formatted_original)
-        self.original_output.verticalScrollBar().setValue(
-            self.original_output.verticalScrollBar().maximum()
+        # Clean up the word
+        word = word.strip()
+        if not word:  # Skip empty words
+            return
+            
+        # Check if it's a punctuation mark
+        is_punctuation = word in ['.', '!', '?', '。', '！', '？', ',', '，', '、']
+        
+        # Get current text and determine if we need a new line
+        current_text = text_widget.toPlainText()
+        needs_new_line = current_text == '' or current_text.endswith('\n')
+        
+        # Start new line with timestamp if needed (but not for lone punctuation)
+        if needs_new_line and not is_punctuation:
+            text_widget.insertPlainText(f"[{timestamp}] {word}")
+        else:
+            # Add space before word unless it's a punctuation mark
+            if not is_punctuation:
+                text_widget.insertPlainText(f" {word}")
+            # else:
+            #     text_widget.insertPlainText(word)
+        
+        # Scroll to bottom
+        text_widget.verticalScrollBar().setValue(
+            text_widget.verticalScrollBar().maximum()
         )
+    
+    def handle_sentence_complete(self, is_translation):
+        # Get the appropriate text widget
+        text_widget = self.translation_output if is_translation else self.original_output
         
-        # Format and display translation if it exists
-        if translation_text:
-            formatted_translation = f"[{timestamp}] {translation_text}"
-            self.translation_output.append(formatted_translation)
-            self.translation_output.verticalScrollBar().setValue(
-                self.translation_output.verticalScrollBar().maximum()
-            )
+        # Get the current line before adding newline
+        current_text = text_widget.toPlainText()
+        current_line = current_text.split('\n')[-1] if current_text else ""
+        
+        # Only add newline if the current line has content
+        if current_text and not current_text.endswith('\n'):
+            text_widget.insertPlainText('\n')
+        
+        # Handle question detection and answering for original text only
+        if not is_translation:
+            # Extract the actual text without timestamp
+            if current_line.startswith('[') and ']' in current_line:
+                actual_text = current_line[current_line.index(']')+1:].strip()
+                
+                # Add to conversation context
+                self.conversation_context.append(actual_text)
+                if len(self.conversation_context) > self.context_window_size * 2:
+                    self.conversation_context.pop(0)
+                
+                # Check if it's a question and AI answering is enabled
+                if self.answer_check.isChecked() and self.is_question(actual_text):
+                    timestamp = current_line[1:current_line.index(']')]
+                    self.answer_question(actual_text, timestamp)
     
     def export_transcription(self):
         try:
@@ -354,6 +438,117 @@ class MainWindow(QMainWindow):
                     self.status_label.setText(f"API configured successfully (Model: {model_name})")
                 except Exception as e:
                     self.status_label.setText(f"API configuration failed: {str(e)}")
+    
+    def is_question(self, text):
+        # Detect if text contains a question
+        question_markers = {'?', '？'}  # English and Chinese question marks
+        question_words = {
+            'what', 'when', 'where', 'who', 'why', 'how', 'which', 'whose', 'whom',
+            '什么', '何时', '哪里', '谁', '为什么', '怎么', '怎样', '哪个', '谁的'
+        }
+        
+        # Check for question marks
+        if any(marker in text for marker in question_markers):
+            return True
+        
+        # Check for question words at the start
+        words = text.lower().split()
+        if words and words[0] in question_words:
+            return True
+            
+        return False
+    
+    def get_context(self):
+        # Get the last few exchanges as context
+        context = []
+        for text in self.conversation_context[-self.context_window_size:]:
+            context.append(text)
+        return "\n".join(context)
+    
+    def role_changed(self, new_role):
+        if new_role == "Custom...":
+            dialog = QDialog(self)
+            dialog.setWindowTitle("Custom Role Configuration")
+            layout = QVBoxLayout(dialog)
+            
+            # Add role description input
+            layout.addWidget(QLabel("Enter custom role description:"))
+            role_input = QTextEdit()
+            role_input.setPlaceholderText("Describe the role and behavior of the AI assistant...")
+            role_input.setMinimumHeight(100)
+            layout.addWidget(role_input)
+            
+            # Add buttons
+            button_box = QHBoxLayout()
+            save_button = QPushButton("Save")
+            cancel_button = QPushButton("Cancel")
+            button_box.addWidget(save_button)
+            button_box.addWidget(cancel_button)
+            layout.addLayout(button_box)
+            
+            # Connect buttons
+            save_button.clicked.connect(dialog.accept)
+            cancel_button.clicked.connect(dialog.reject)
+            
+            if dialog.exec() == QDialog.DialogCode.Accepted:
+                custom_role = role_input.toPlainText().strip()
+                if custom_role:
+                    self.current_role = custom_role
+                else:
+                    # Reset to default if empty
+                    self.role_combo.setCurrentText("General Assistant")
+            else:
+                # Reset to default if cancelled
+                self.role_combo.setCurrentText("General Assistant")
+        else:
+            # Predefined roles
+            roles = {
+                "General Assistant": "You are a helpful assistant providing concise answers based on conversation context.",
+                "Technical Interviewer": "You are a technical interviewer assessing candidate's technical skills. Focus on technical accuracy and depth of knowledge in answers.",
+                "HR Interviewer": "You are an HR interviewer evaluating candidate fit. Focus on soft skills, experience, and behavioral aspects in answers.",
+                "Meeting Participant": "You are a meeting participant helping to clarify points and summarize discussions.",
+                "Student": "You are a student assistant helping to understand and explain concepts in an educational context.",
+                "Teacher": "You are a teacher providing clear explanations and educational context in your answers."
+            }
+            self.current_role = roles.get(new_role, roles["General Assistant"])
+    
+    def answer_question(self, question, timestamp):
+        try:
+            # Get conversation context
+            context = self.get_context()
+            
+            # Prepare prompt with context
+            prompt = f"""Context of the conversation:
+                    {context}
+
+                    Based on the above context, please answer this question:
+                    {question}
+
+                    Please provide a concise and relevant answer based on the context provided.
+                    Pay attention, the context and question are from an interview, so sometimes the context is not related to the question.
+                    The answer should be in {self.language_combo.currentText()}"""
+            
+            # Get answer from LLM
+            response = self.translation_manager.client.chat.completions.create(
+                model=self.translation_manager.model_name,
+                messages=[
+                    {"role": "system", "content": self.current_role},
+                    {"role": "user", "content": prompt}
+                ]
+            )
+            
+            answer = response.choices[0].message.content.strip()
+            
+            # Format and display the answer
+            formatted_answer = f"[{timestamp}] Q: {question}\nA: {answer}\n"
+            self.answer_output.append(formatted_answer)
+            self.answer_output.verticalScrollBar().setValue(
+                self.answer_output.verticalScrollBar().maximum()
+            )
+            
+        except Exception as e:
+            error_msg = f"[{timestamp}] Error answering question: {str(e)}\n"
+            self.answer_output.append(error_msg)
 
 def main():
     app = QApplication(sys.argv)
