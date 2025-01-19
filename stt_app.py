@@ -10,7 +10,7 @@ from PyQt6.QtCore import Qt, QThread, pyqtSignal
 
 from datetime import datetime
 from db import DatabaseManager
-from translation import TranscriptionThread, TranslationManager
+from translation import TranscriptionThread, TranslationManager, AIAssistant
 from audiostream import AudioStreamer
 
 
@@ -92,6 +92,7 @@ class MainWindow(QMainWindow):
         # Initialize managers
         self.db_manager = DatabaseManager()
         self.translation_manager = TranslationManager()
+        self.ai_assistant = AIAssistant()  # Initialize AI Assistant
         
         # Create central widget and layout
         central_widget = QWidget()
@@ -359,9 +360,19 @@ class MainWindow(QMainWindow):
                     self.conversation_context.pop(0)
                 
                 # Check if it's a question and AI answering is enabled
-                if self.answer_check.isChecked() and self.is_question(actual_text):
+                if self.answer_check.isChecked() and self.ai_assistant.is_question(actual_text):
                     timestamp = current_line[1:current_line.index(']')]
-                    self.answer_question(actual_text, timestamp)
+                    answer = self.ai_assistant.answer_question(
+                        actual_text, 
+                        self.get_context(),
+                        self.current_role,
+                        timestamp,
+                        self.language_combo.currentText()
+                    )
+                    self.answer_output.append(answer)
+                    self.answer_output.verticalScrollBar().setValue(
+                        self.answer_output.verticalScrollBar().maximum()
+                    )
     
     def export_transcription(self):
         try:
@@ -434,29 +445,12 @@ class MainWindow(QMainWindow):
             model_name = dialog.model_input.text() or dialog.model_input.placeholderText()
             if api_key:
                 try:
+                    # Configure both translation manager and AI assistant
                     self.translation_manager.configure(base_url, api_key, model_name)
+                    self.ai_assistant.configure(base_url, api_key, model_name)
                     self.status_label.setText(f"API configured successfully (Model: {model_name})")
                 except Exception as e:
                     self.status_label.setText(f"API configuration failed: {str(e)}")
-    
-    def is_question(self, text):
-        # Detect if text contains a question
-        question_markers = {'?', '？'}  # English and Chinese question marks
-        question_words = {
-            'what', 'when', 'where', 'who', 'why', 'how', 'which', 'whose', 'whom',
-            '什么', '何时', '哪里', '谁', '为什么', '怎么', '怎样', '哪个', '谁的'
-        }
-        
-        # Check for question marks
-        if any(marker in text for marker in question_markers):
-            return True
-        
-        # Check for question words at the start
-        words = text.lower().split()
-        if words and words[0] in question_words:
-            return True
-            
-        return False
     
     def get_context(self):
         # Get the last few exchanges as context
@@ -511,44 +505,6 @@ class MainWindow(QMainWindow):
                 "Teacher": "You are a teacher providing clear explanations and educational context in your answers."
             }
             self.current_role = roles.get(new_role, roles["General Assistant"])
-    
-    def answer_question(self, question, timestamp):
-        try:
-            # Get conversation context
-            context = self.get_context()
-            
-            # Prepare prompt with context
-            prompt = f"""Context of the conversation:
-                    {context}
-
-                    Based on the above context, please answer this question:
-                    {question}
-
-                    Please provide a concise and relevant answer based on the context provided.
-                    Pay attention, the context and question are from an interview, so sometimes the context is not related to the question.
-                    The answer should be in {self.language_combo.currentText()}"""
-            
-            # Get answer from LLM
-            response = self.translation_manager.client.chat.completions.create(
-                model=self.translation_manager.model_name,
-                messages=[
-                    {"role": "system", "content": self.current_role},
-                    {"role": "user", "content": prompt}
-                ]
-            )
-            
-            answer = response.choices[0].message.content.strip()
-            
-            # Format and display the answer
-            formatted_answer = f"[{timestamp}] Q: {question}\nA: {answer}\n"
-            self.answer_output.append(formatted_answer)
-            self.answer_output.verticalScrollBar().setValue(
-                self.answer_output.verticalScrollBar().maximum()
-            )
-            
-        except Exception as e:
-            error_msg = f"[{timestamp}] Error answering question: {str(e)}\n"
-            self.answer_output.append(error_msg)
 
 def main():
     app = QApplication(sys.argv)
