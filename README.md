@@ -1,6 +1,6 @@
 # Real-time Speech to Text Application
 
-This is a real-time speech-to-text application that uses OpenAI's Whisper model to transcribe audio from your microphone and provides real-time translation and AI-powered question answering.
+This is an interview assistant with real-time speech-to-text feature that uses OpenAI's Whisper model to transcribe audio from your microphone and provides real-time translation and AI-powered question answering.
 
 ## Requirements
 
@@ -25,6 +25,7 @@ pip install -r requirements.txt
 3. Configure your OpenAI API key (optional, for translation and AI features):
    - Create a `.env` file in the project root
    - Add your API key: `OPENAI_API_KEY=your-key-here`
+   - You can also use openai compatiable api here by setting `OPENAI_API_BASE_URL`
    - Or configure it through the UI in the API Settings
 
 ## Usage
