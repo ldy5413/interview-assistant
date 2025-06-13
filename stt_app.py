@@ -1,17 +1,31 @@
-import sys, os
+import sys
+import os
+
 import numpy as np
 import sounddevice as sd
 
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QPushButton, 
-                           QVBoxLayout, QWidget, QTextEdit, QLabel,
-                           QComboBox, QHBoxLayout, QSpinBox, QFileDialog,
-                           QCheckBox, QDialog, QLineEdit, QGroupBox)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
+from PyQt6.QtWidgets import (
+    QApplication,
+    QMainWindow,
+    QPushButton,
+    QVBoxLayout,
+    QWidget,
+    QTextEdit,
+    QLabel,
+    QComboBox,
+    QHBoxLayout,
+    QSpinBox,
+    QFileDialog,
+    QCheckBox,
+    QDialog,
+)
+from PyQt6.QtCore import Qt
 
 from datetime import datetime
 from db import DatabaseManager
 from translation import TranscriptionThread, TranslationManager, AIAssistant
 from audiostream import AudioStreamer
+from ui import APIConfigDialog, RoleConfigDialog, ROLE_DESCRIPTIONS
 
 
 CHUNK_DURATION = 3  # seconds
@@ -30,50 +44,6 @@ WHISPER_MODELS = {
     "Faster Medium": ("medium", "faster"),
     "Faster Large": ("large", "faster")
 }
-
-class APIConfigDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("API Configuration")
-        layout = QVBoxLayout(self)
-        
-        # Base URL
-        base_url_layout = QHBoxLayout()
-        base_url_layout.addWidget(QLabel("Base URL:"))
-        self.base_url_input = QLineEdit()
-        default_base_url = os.getenv("OPENAI_API_BASE_URL", "https://api.openai.com/v1")
-        self.base_url_input.setPlaceholderText(default_base_url)
-        base_url_layout.addWidget(self.base_url_input)
-        layout.addLayout(base_url_layout)
-        
-        # API Key
-        api_key_layout = QHBoxLayout()
-        api_key_layout.addWidget(QLabel("API Key:"))
-        self.api_key_input = QLineEdit()
-        default_api_key = os.getenv("OPENAI_API_KEY", "your-api-key-here")
-        self.api_key_input.setPlaceholderText(default_api_key)
-        self.api_key_input.setEchoMode(QLineEdit.EchoMode.Password)
-        api_key_layout.addWidget(self.api_key_input)
-        layout.addLayout(api_key_layout)
-        
-        # Model Name
-        model_layout = QHBoxLayout()
-        model_layout.addWidget(QLabel("Model Name:"))
-        self.model_input = QLineEdit()
-        default_model = os.getenv("OPENAI_MODEL_NAME", "gpt-3.5-turbo")
-        self.model_input.setPlaceholderText(default_model)
-        model_layout.addWidget(self.model_input)
-        layout.addLayout(model_layout)
-        
-        # Buttons
-        button_layout = QHBoxLayout()
-        save_button = QPushButton("Save")
-        save_button.clicked.connect(self.accept)
-        cancel_button = QPushButton("Cancel")
-        cancel_button.clicked.connect(self.reject)
-        button_layout.addWidget(save_button)
-        button_layout.addWidget(cancel_button)
-        layout.addLayout(button_layout)
 
 
 
@@ -461,50 +431,19 @@ class MainWindow(QMainWindow):
     
     def role_changed(self, new_role):
         if new_role == "Custom...":
-            dialog = QDialog(self)
-            dialog.setWindowTitle("Custom Role Configuration")
-            layout = QVBoxLayout(dialog)
-            
-            # Add role description input
-            layout.addWidget(QLabel("Enter custom role description:"))
-            role_input = QTextEdit()
-            role_input.setPlaceholderText("Describe the role and behavior of the AI assistant...")
-            role_input.setMinimumHeight(100)
-            layout.addWidget(role_input)
-            
-            # Add buttons
-            button_box = QHBoxLayout()
-            save_button = QPushButton("Save")
-            cancel_button = QPushButton("Cancel")
-            button_box.addWidget(save_button)
-            button_box.addWidget(cancel_button)
-            layout.addLayout(button_box)
-            
-            # Connect buttons
-            save_button.clicked.connect(dialog.accept)
-            cancel_button.clicked.connect(dialog.reject)
-            
+            dialog = RoleConfigDialog(self)
             if dialog.exec() == QDialog.DialogCode.Accepted:
-                custom_role = role_input.toPlainText().strip()
+                custom_role = dialog.get_role_description()
                 if custom_role:
                     self.current_role = custom_role
                 else:
-                    # Reset to default if empty
                     self.role_combo.setCurrentText("General Assistant")
             else:
-                # Reset to default if cancelled
                 self.role_combo.setCurrentText("General Assistant")
         else:
-            # Predefined roles
-            roles = {
-                "General Assistant": "You are a helpful assistant providing concise answers based on conversation context.",
-                "Technical Interviewer": "You are a technical interviewer assessing candidate's technical skills. Focus on technical accuracy and depth of knowledge in answers.",
-                "HR Interviewer": "You are an HR interviewer evaluating candidate fit. Focus on soft skills, experience, and behavioral aspects in answers.",
-                "Meeting Participant": "You are a meeting participant helping to clarify points and summarize discussions.",
-                "Student": "You are a student assistant helping to understand and explain concepts in an educational context.",
-                "Teacher": "You are a teacher providing clear explanations and educational context in your answers."
-            }
-            self.current_role = roles.get(new_role, roles["General Assistant"])
+            self.current_role = ROLE_DESCRIPTIONS.get(
+                new_role, ROLE_DESCRIPTIONS["General Assistant"]
+            )
 
 def main():
     app = QApplication(sys.argv)

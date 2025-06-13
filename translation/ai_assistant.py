@@ -53,5 +53,5 @@ class AIAssistant(TranslationManager):
         words = text.lower().split()
         if words and words[0] in question_words:
             return True
-            
+
         return False
