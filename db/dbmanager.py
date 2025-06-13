@@ -1,8 +1,18 @@
+import os
 import sqlite3
 
 class DatabaseManager:
-    def __init__(self):
-        self.db_path = 'transcriptions.db'
+    def __init__(self, db_path: str | None = None):
+        """Simple wrapper around SQLite used for storing transcriptions.
+
+        Parameters
+        ----------
+        db_path: str | None
+            Optional path to the database file. If not provided the value of the
+            ``DB_PATH`` environment variable is used, falling back to
+            ``transcriptions.db``.
+        """
+        self.db_path = db_path or os.getenv("DB_PATH", "transcriptions.db")
         # Create the table in the main thread
         self._init_db()
     

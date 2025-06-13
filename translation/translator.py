@@ -184,5 +184,5 @@ class TranscriptionThread(QThread):
             
             if self.db_manager:
                 self.db_manager.add_transcription(sentence)
-            
+
             self.sentence_complete.emit(False)
